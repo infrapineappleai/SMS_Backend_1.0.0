@@ -6,7 +6,7 @@ const studentController = require('../../controllers/student_controller/studentC
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'Uploads/students/');
+    cb(null, 'uploads/students/');
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);

@@ -26,7 +26,7 @@ exports.finalizeStudentRegistration = async (req, res) => {
       {
         ...parsedUser,
         role: 'student',
-        status: 'active'
+        status: parsedUser.status ? parsedUser.status.toLowerCase() : 'active'
       },
       { transaction }
     );
@@ -257,6 +257,12 @@ exports.updateStudentProfile = async (req, res) => {
       throw new Error('Student not found');
     }
 
+    // Validate status
+    const validStatuses = ['active', 'inactive'];
+    if (req.body.status && !validStatuses.includes(req.body.status.toLowerCase())) {
+      throw new Error('Invalid status value. Must be "active" or "inactive".');
+    }
+
     // Update User model
     await User.update(
       {
@@ -269,6 +275,7 @@ exports.updateStudentProfile = async (req, res) => {
         gender: userDetails.gender,
         date_of_birth: userDetails.date_of_birth,
         address: userDetails.address,
+        status: req.body.status ? req.body.status.toLowerCase() : user.status,
       },
       { where: { id: userId }, transaction }
     );
