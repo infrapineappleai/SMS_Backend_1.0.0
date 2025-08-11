@@ -21,7 +21,7 @@ const createSchedule = async (req, res) => {
 
   const transaction = await sequelize.transaction();
   try {
-    const { User, Slot, UserSlot, UserGrade } = sequelize.models;
+    const { User, Slot, UserSlot, UserGrade, UserBranch } = sequelize.models;  // Add UserBranch
 
     const teacher = await User.findOne({ where: { id: user_id, role: 'teacher' }, transaction });
     if (!teacher) {
@@ -64,6 +64,13 @@ const createSchedule = async (req, res) => {
       const newSlot = await Slot.create({ day, st_time: start_time, end_time, branch_id, course_id, grade_id }, { transaction });
 
       await UserSlot.create({ user_id, slot_id: newSlot.id }, { transaction });
+
+      // Create user-branch association if it doesn't exist
+      await UserBranch.findOrCreate({
+        where: { user_id, branch_id },
+        defaults: { user_id, branch_id },
+        transaction
+      });
 
       createdSlots.push({
         slot_id: newSlot.id,
@@ -253,7 +260,7 @@ const updateShedule = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { Slot, UserSlot, UserGrade, User } = sequelize.models;
+    const { Slot, UserSlot, UserGrade, User, UserBranch } = sequelize.models;  // Add UserBranch
 
     const existingSlot = await Slot.findOne({
       where: { id: slot_id },
@@ -274,7 +281,7 @@ const updateShedule = async (req, res) => {
       await UserSlot.create({ user_id, slot_id }, { transaction });
     }
 
-    // Update UserGrade if user_id and grade_id provided, but do NOT auto-change grade if only user_id changed
+    // Update UserGrade if user_id and grade_id provided
     if (user_id && grade_id) {
       const userGrade = await UserGrade.findOne({ where: { user_id }, transaction });
       if (userGrade) {
@@ -286,7 +293,19 @@ const updateShedule = async (req, res) => {
       }
     }
 
-    // Update slot fields including grade_id (directly on slot)
+    // Update UserBranch if user_id and branch_id provided
+    if (user_id && branch_id) {
+      const userBranch = await UserBranch.findOne({ where: { user_id }, transaction });
+      if (userBranch) {
+        if (userBranch.branch_id !== branch_id) {
+          await userBranch.update({ branch_id }, { transaction });
+        }
+      } else {
+        await UserBranch.create({ user_id, branch_id }, { transaction });
+      }
+    }
+
+    // Update slot fields including grade_id
     await Slot.update(
       {
         day: day ?? existingSlot.day,
@@ -542,6 +561,26 @@ const getTimeSlots = async (req, res) => {
   }
 };
 
+// Get all branches
+const getBranches = async (req, res) => {
+  try {
+    const branches = await sequelize.models.Branch.findAll({
+      attributes: ['id', 'branch_name'],
+      order: [['branch_name', 'ASC']]
+    });
+
+    const transformed = branches.map(branch => ({
+      id: branch.id,
+      name: branch.branch_name
+    }));
+
+    res.json({ success: true, data: transformed });
+  } catch (error) {
+    console.error('Branches fetch error:', error);
+    res.status(500).json({ success: false, message: 'Error fetching branches', error: error.message });
+  }
+};
+
 module.exports = {
   createSchedule,
   getSchedule,
@@ -553,5 +592,6 @@ module.exports = {
   getCourses,
   getGrades,
   getDays,
-  getTimeSlots
+  getTimeSlots,
+  getBranches
 };

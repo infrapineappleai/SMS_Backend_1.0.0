@@ -1,4 +1,6 @@
 const { User, StudentDetails, UserGrade, UserSlot, UserBranch, Branch, Slot, Payment, sequelize } = require('../../models/student_models/index');
+const fs = require('fs').promises; 
+const path = require('path');
 
 exports.finalizeStudentRegistration = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -12,85 +14,93 @@ exports.finalizeStudentRegistration = async (req, res) => {
     } = req.body;
 
     const parsedUser = JSON.parse(user || '{}');
-    const parsedStudentDetails = JSON.parse(student_details || '{}');
+    const parsedStudentDetails = student_details ? JSON.parse(student_details || '{}') : {};
     const parsedGradeIds = JSON.parse(grade_ids || '[]');
     const parsedSlotIds = JSON.parse(slot_ids || '[]');
     const parsedBranchIds = JSON.parse(branch_ids || '[]');
 
-    if (!parsedStudentDetails.student_no) {
-      throw new Error('student_no is required');
+    // Validate role
+    const validRoles = ['student', 'teacher'];
+    if (!validRoles.includes(parsedUser.role)) {
+      throw new Error('Invalid role. Must be "student" or "teacher".');
     }
 
-    // Create User
+    // Validate student_no only for students
+    if (parsedUser.role === 'student' && (!parsedStudentDetails.student_no || !parsedStudentDetails.student_no.trim())) {
+      throw new Error('student_no is required for students');
+    }
+
     const newUser = await User.create(
       {
         ...parsedUser,
-        role: 'student',
+        role: parsedUser.role || 'student',
         status: parsedUser.status ? parsedUser.status.toLowerCase() : 'active'
       },
       { transaction }
     );
 
-    // Handle photo upload
     let photoUrl = '/default-avatar.png';
     if (req.file) {
       photoUrl = `/uploads/students/${req.file.filename}`;
-      console.log('Photo saved:', photoUrl); // Debug
+      console.log('Photo saved:', photoUrl);
     }
 
-    // Create Student Details
-    await StudentDetails.create(
-      {
-        user_id: newUser.id,
-        student_no: parsedStudentDetails.student_no,
-        salutation: parsedStudentDetails.salutation,
-        ice_contact: parsedStudentDetails.ice_contact,
-        photo_url: photoUrl
-      },
-      { transaction }
-    );
+    // Only create StudentDetails for students
+    if (parsedUser.role === 'student') {
+      await StudentDetails.create(
+        {
+          user_id: newUser.id,
+          student_no: parsedStudentDetails.student_no,
+          salutation: parsedStudentDetails.salutation,
+          ice_contact: parsedStudentDetails.ice_contact,
+          photo_url: photoUrl
+        },
+        { transaction }
+      );
 
-    // Assign Grades
-    if (Array.isArray(parsedGradeIds) && parsedGradeIds.length > 0) {
-      const gradeRecords = parsedGradeIds.map(grade_id => ({
-        user_id: newUser.id,
-        grade_id
-      }));
-      await UserGrade.bulkCreate(gradeRecords, { transaction });
-    }
+      // Assign Grades
+      if (Array.isArray(parsedGradeIds) && parsedGradeIds.length > 0) {
+        const gradeRecords = parsedGradeIds.map(grade_id => ({
+          user_id: newUser.id,
+          grade_id
+        }));
+        await UserGrade.bulkCreate(gradeRecords, { transaction });
+      }
 
-    // Assign Slots
-    if (Array.isArray(parsedSlotIds) && parsedSlotIds.length > 0) {
-      const slotRecords = parsedSlotIds.map(slot_id => ({
-        user_id: newUser.id,
-        slot_id
-      }));
-      await UserSlot.bulkCreate(slotRecords, { transaction });
-    }
+      // Assign Slots
+      if (Array.isArray(parsedSlotIds) && parsedSlotIds.length > 0) {
+        const slotRecords = parsedSlotIds.map(slot_id => ({
+          user_id: newUser.id,
+          slot_id
+        }));
+        await UserSlot.bulkCreate(slotRecords, { transaction });
+      }
 
-    // Assign Branches
-    if (Array.isArray(parsedBranchIds) && parsedBranchIds.length > 0) {
-      const branchRecords = parsedBranchIds.map(branch_id => ({
-        user_id: newUser.id,
-        branch_id
-      }));
-      await UserBranch.bulkCreate(branchRecords, { transaction, ignoreDuplicates: true });
+      // Assign Branches
+      if (Array.isArray(parsedBranchIds) && parsedBranchIds.length > 0) {
+        const branchRecords = parsedBranchIds.map(branch_id => ({
+          user_id: newUser.id,
+          branch_id
+        }));
+        await UserBranch.bulkCreate(branchRecords, { transaction, ignoreDuplicates: true });
+      }
     }
 
     await transaction.commit();
     res.status(201).json({
       success: true,
-      message: 'Student registration completed successfully',
+      message: `${parsedUser.role.charAt(0).toUpperCase() + parsedUser.role.slice(1)} registration completed successfully`,
       user_id: newUser.id,
-      id: newUser.id, 
-      photo_url: photoUrl 
+      id: newUser.id,
+      role: newUser.role,
+      photo_url: photoUrl
     });
   } catch (error) {
     await transaction.rollback();
     console.error('Error in finalizeStudentRegistration:', error);
     res.status(400).json({
       success: false,
-      message: 'Student registration failed',
+      message: 'Registration failed',
       error: error.message
     });
   }
@@ -188,7 +198,6 @@ exports.getStudentGrades = async (req, res) => {
 exports.updateStudentProfile = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    // Parse request data
     let studentDetails;
     try {
       studentDetails = req.body.student_details
@@ -225,19 +234,26 @@ exports.updateStudentProfile = async (req, res) => {
       throw new Error('Invalid slot_ids format');
     }
 
-    // Validate student_no
-    if (studentDetails.student_no && studentDetails.student_no.trim() === '') {
-      throw new Error('Student number must be a non-empty string');
+    const userId = parseInt(req.params.userId, 10);
+    if (isNaN(userId)) {
+      throw new Error('Invalid user ID');
     }
 
-    // Prepare student update data
+    const user = await User.findOne({ where: { id: userId }, transaction });
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    if ((userDetails.role === 'student' || user.role === 'student') && studentDetails.student_no && studentDetails.student_no.trim() === '') {
+      throw new Error('Student number must be a non-empty string for students');
+    }
+
     const studentUpdateData = {
       student_no: studentDetails.student_no,
       salutation: studentDetails.salutation,
       ice_contact: studentDetails.ice_contact,
     };
 
-    // Handle photo upload
     if (req.file) {
       studentUpdateData.photo_url = `/uploads/students/${req.file.filename}`;
       console.log('Photo saved:', studentUpdateData.photo_url);
@@ -245,25 +261,17 @@ exports.updateStudentProfile = async (req, res) => {
       studentUpdateData.photo_url = studentDetails.photo_url;
     }
 
-    // Validate userId
-    const userId = parseInt(req.params.userId, 10);
-    if (isNaN(userId)) {
-      throw new Error('Invalid user ID');
-    }
-
-    // Verify student exists
-    const user = await User.findOne({ where: { id: userId, role: 'student' }, transaction });
-    if (!user) {
-      throw new Error('Student not found');
-    }
-
-    // Validate status
     const validStatuses = ['active', 'inactive'];
     if (req.body.status && !validStatuses.includes(req.body.status.toLowerCase())) {
       throw new Error('Invalid status value. Must be "active" or "inactive".');
     }
 
-    // Update User model
+    // Validate role if provided
+    const validRoles = ['student', 'teacher'];
+    if (userDetails.role && !validRoles.includes(userDetails.role)) {
+      throw new Error('Invalid role. Must be "student" or "teacher".');
+    }
+
     await User.update(
       {
         name: userDetails.name,
@@ -275,25 +283,26 @@ exports.updateStudentProfile = async (req, res) => {
         gender: userDetails.gender,
         date_of_birth: userDetails.date_of_birth,
         address: userDetails.address,
+        role: userDetails.role || user.role,
         status: req.body.status ? req.body.status.toLowerCase() : user.status,
       },
       { where: { id: userId }, transaction }
     );
 
-    // Update StudentDetails model
-    const [updated] = await StudentDetails.update(
-      studentUpdateData,
-      { where: { user_id: userId }, transaction }
-    );
-    if (updated === 0) {
-      throw new Error('Student profile not found');
+    // Update StudentDetails only for students
+    if (userDetails.role === 'student' || user.role === 'student') {
+      const [updated] = await StudentDetails.update(
+        studentUpdateData,
+        { where: { user_id: userId }, transaction }
+      );
+      if (updated === 0 && user.role === 'student') {
+        throw new Error('Student profile not found');
+      }
     }
 
-    // Update UserGrade (Grades and Courses)
-    if (Array.isArray(gradeIds) && gradeIds.length > 0) {
-      // Delete existing grades
+    // Update grades and slots only for students
+    if ((userDetails.role === 'student' || user.role === 'student') && Array.isArray(gradeIds) && gradeIds.length > 0) {
       await UserGrade.destroy({ where: { user_id: userId }, transaction });
-      // Insert new grades
       const gradeRecords = gradeIds.map(grade_id => ({
         user_id: userId,
         grade_id: parseInt(grade_id, 10),
@@ -301,11 +310,8 @@ exports.updateStudentProfile = async (req, res) => {
       await UserGrade.bulkCreate(gradeRecords, { transaction });
     }
 
-    // Update UserSlot (Slots: Day and Time)
-    if (Array.isArray(slotIds) && slotIds.length > 0) {
-      // Delete existing slots
+    if ((userDetails.role === 'student' || user.role === 'student') && Array.isArray(slotIds) && slotIds.length > 0) {
       await UserSlot.destroy({ where: { user_id: userId }, transaction });
-      // Insert new slots
       const slotRecords = slotIds.map(slot_id => ({
         user_id: userId,
         slot_id: parseInt(slot_id, 10),
@@ -314,7 +320,11 @@ exports.updateStudentProfile = async (req, res) => {
     }
 
     await transaction.commit();
-    res.json({ success: true, photo_url: studentUpdateData.photo_url || 'unchanged' });
+    res.json({ 
+      success: true, 
+      photo_url: studentUpdateData.photo_url || 'unchanged',
+      role: userDetails.role || user.role
+    });
   } catch (error) {
     await transaction.rollback();
     console.error('Error updating student:', error);
@@ -351,7 +361,6 @@ exports.deleteStudent = async (req, res) => {
   try {
     const userId = req.params.userId;
 
-    // Find student detail to get student_details.id
     const studentDetail = await StudentDetails.findOne({
       where: { user_id: userId },
       transaction,
@@ -360,8 +369,8 @@ exports.deleteStudent = async (req, res) => {
     if (!studentDetail) throw new Error("Student not found");
 
     const studentDetailsId = studentDetail.id;
+    const photoUrl = studentDetail.photo_url;
 
-    // Delete related records
     await Promise.all([
       Payment.destroy({ where: { student_details_id: studentDetailsId }, transaction }),
       UserGrade.destroy({ where: { user_id: userId }, transaction }),
@@ -370,12 +379,26 @@ exports.deleteStudent = async (req, res) => {
       StudentDetails.destroy({ where: { user_id: userId }, transaction }),
     ]);
 
-    // Delete the user last
     const deleted = await User.destroy({ where: { id: userId }, transaction });
     if (deleted === 0) throw new Error('User not found');
 
+    if (photoUrl && photoUrl !== '/default-avatar.png') {
+      const filePath = path.join(__dirname, '..', '..', 'uploads', 'students', path.basename(photoUrl));
+      console.log(`Attempting to delete file at: ${filePath}`);
+      const fileExists = await fs.access(filePath).then(() => true).catch(() => false);
+      if (fileExists) {
+        await fs.unlink(filePath);
+        console.log(`Deleted image file: ${filePath}`);
+      } else {
+        console.error(`File does not exist: ${filePath}`);
+      }
+    }
+
     await transaction.commit();
-    res.json({ success: true, message: 'Student and all related data deleted permanently' });
+    res.json({ 
+      success: true, 
+      message: 'Student and all related data deleted permanently'
+    });
   } catch (error) {
     await transaction.rollback();
     console.error("Hard delete failed:", error.message);
