@@ -27,6 +27,8 @@ const branchRouter1 = require('./routes/student_router/branchRouter1');
 const courseRouter1 = require('./routes/student_router/courseRouter1');
 const slotRouter1 = require('./routes/student_router/slotRouter1');
 
+const dashboardRouter = require('./routes/dashboard_router/dashboardRouter')
+
 
 // Ensure Uploads/students directory exists
 const uploadDir = path.join(__dirname, 'uploads', 'students');
@@ -62,7 +64,7 @@ app.use('/api/courses', courseRouter1);
 app.use('/api/slots', slotRouter1);
 app.use('/api/branches', branchRouter1);
 
-
+app.use('/api/dashboard', dashboardRouter)
 
 
 
