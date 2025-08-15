@@ -38,8 +38,8 @@ if (!fs.existsSync(uploadDir)) {
 
 // CORS configuration
 app.use(cors({
-  origin: 'http://localhost:3000',
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  origin: 'https://aradanabeta.pineappleai.cloud',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
